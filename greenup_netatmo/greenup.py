@@ -11,9 +11,11 @@ Unités observées sur la borne (relevé du 22/11/2026) :
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import time
+from urllib.parse import unquote
 
 import paho.mqtt.client as mqtt
 import requests
@@ -154,6 +156,62 @@ class Netatmo:
         raise RuntimeError("Aucune borne NLEVSE trouvée (vérifiez les scopes du token, ou renseignez home_id et module_id)")
 
 
+class NetatmoWeb(Netatmo):
+    """Mode « compte » : se connecte comme le portail dev.netatmo.com avec l'e-mail et
+    le mot de passe Netatmo, et récupère le cookie netatmocomaccess_token (~3 h).
+    Non officiel : lecture seule, à utiliser avec une fréquence raisonnable."""
+
+    LOGIN_PAGE = "https://auth.netatmo.com/fr-fr/access/login"
+    LOGIN_POST = "https://auth.netatmo.com/access/postlogin"
+    NEXT_URL = "https://dev.netatmo.com/"
+    UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
+
+    def __init__(self, opts, state):  # pylint: disable=super-init-not-called
+        self.email = opts["netatmo_email"]
+        self.password = opts["netatmo_password"]
+        self.manual = opts.get("session_token") or ""
+        self.state = state
+        if self.manual and state.get("manual_token") != self.manual:
+            state["manual_token"] = self.manual
+            state["access_token"] = self.manual
+            state["expires_at"] = time.time() + 3 * 3600 - 300
+            save_json(STATE_FILE, state)
+
+    def refresh(self):
+        log.info("Connexion au compte Netatmo (mode web)")
+        sess = requests.Session()
+        sess.headers.update({"User-Agent": self.UA, "Accept-Language": "fr-FR,fr;q=0.9"})
+        page = sess.get(self.LOGIN_PAGE, params={"next_url": self.NEXT_URL}, timeout=20)
+        m = re.search(r'name="_token"\s+value="([^"]+)"', page.text) or re.search(r'value="([^"]+)"\s+name="_token"', page.text)
+        if not m:
+            raise AuthError(f"Page de connexion inattendue ({page.status_code}), champ _token introuvable")
+        r = sess.post(
+            self.LOGIN_POST,
+            data={
+                "email": self.email,
+                "password": self.password,
+                "_token": m.group(1),
+                "stay_logged": "accept",
+                "next_url": self.NEXT_URL,
+            },
+            headers={"Referer": page.url, "Origin": "https://auth.netatmo.com"},
+            timeout=20,
+            allow_redirects=True,
+        )
+        names = sorted({c.name for c in sess.cookies})
+        log.debug("Connexion web : HTTP %s, URL finale %s, cookies %s", r.status_code, r.url, names)
+        token = next((c.value for c in sess.cookies if c.name == "netatmocomaccess_token"), None)
+        if not token:
+            raise AuthError(
+                f"Connexion refusée (HTTP {r.status_code}, cookies reçus : {names}). "
+                "Vérifiez e-mail et mot de passe ; une double authentification ou un captcha bloque ce mode"
+            )
+        self.state["access_token"] = unquote(token)
+        self.state["expires_at"] = time.time() + 3 * 3600 - 300
+        save_json(STATE_FILE, self.state)
+        log.info("Connexion web réussie")
+
+
 # --------------------------------------------------------------------------- MQTT
 def mqtt_settings(opts):
     """Options manuelles si mqtt_host est renseigné, sinon service MQTT du Supervisor."""
@@ -265,14 +323,21 @@ def main():
         stream=sys.stdout,
     )
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-    required = ("client_id", "client_secret") if opts.get("auth_code") else ("client_id", "client_secret", "refresh_token")
+    web = bool(opts.get("netatmo_email"))
+    if web:
+        required = ("netatmo_email", "netatmo_password")
+    elif opts.get("auth_code"):
+        required = ("client_id", "client_secret")
+    else:
+        required = ("client_id", "client_secret", "refresh_token")
     for key in required:
         if not opts.get(key):
             log.error("Option manquante : %s", key)
             sys.exit(1)
 
     state = load_json(STATE_FILE, {})
-    api = Netatmo(opts, state)
+    api = NetatmoWeb(opts, state) if web else Netatmo(opts, state)
+    log.info("Mode d'authentification : %s", "compte Netatmo (web)" if web else "application OAuth")
     while True:
         try:
             home_id, mod = api.find_charger(opts.get("home_id") or "", opts.get("module_id") or "")

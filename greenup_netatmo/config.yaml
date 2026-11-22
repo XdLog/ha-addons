@@ -1,5 +1,5 @@
 name: "Green'Up Netatmo"
-version: "0.1.5"
+version: "0.2.0"
 slug: greenup_netatmo
 description: "Borne Legrand Green'Up Home (NLEVSE) via l'API Netatmo, publiée en MQTT avec découverte"
 arch:
@@ -11,6 +11,9 @@ boot: auto
 services:
   - "mqtt:need"
 options:
+  netatmo_email: ""
+  netatmo_password: ""
+  session_token: ""
   client_id: ""
   client_secret: ""
   refresh_token: ""
@@ -25,8 +28,11 @@ options:
   mqtt_user: ""
   mqtt_password: ""
 schema:
-  client_id: str
-  client_secret: password
+  netatmo_email: str?
+  netatmo_password: password?
+  session_token: password?
+  client_id: str?
+  client_secret: password?
   refresh_token: password?
   auth_code: str?
   redirect_uri: str?
