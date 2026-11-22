@@ -2,7 +2,7 @@
 Netatmo et publie les valeurs dans Mosquitto avec découverte MQTT Home Assistant.
 
 Unités observées sur la borne (relevé du 22/11/2026) :
-  current_charge_instant_consumption : mW  (707351 -> 7,07 kW)
+  current_charge_instant_consumption : cW  (707351 -> 7073 W)
   current_total_charge_consumption   : Wh, remis à zéro à chaque session
   current_charge_duration            : minutes (supposé)
   charging_station_status            : 0 = au repos, 3 = en charge (autres codes inconnus)
@@ -430,7 +430,7 @@ def main():
 
                 status = int(m.get("charging_station_status", -1))
                 payload = {
-                    "power_w": round(int(m.get("current_charge_instant_consumption", 0)) / 1000),
+                    "power_w": round(int(m.get("current_charge_instant_consumption", 0)) / 100),
                     "session_kwh": round(session_wh / 1000, 3),
                     "total_kwh": round(state["total_wh"] / 1000, 3),
                     "duration_min": int(m.get("current_charge_duration", 0)),
