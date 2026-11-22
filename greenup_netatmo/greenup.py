@@ -22,6 +22,7 @@ import requests
 
 OPTIONS_FILE = "/data/options.json"
 STATE_FILE = "/data/state.json"
+COOKIES_FILE = "/data/cookies.json"
 API = "https://api.netatmo.com"
 DISCOVERY_PREFIX = "homeassistant"
 BASE_TOPIC = "greenup_netatmo"
@@ -178,10 +179,19 @@ class NetatmoWeb(Netatmo):
             save_json(STATE_FILE, state)
 
     def refresh(self):
-        log.info("Connexion au compte Netatmo (mode web)")
         sess = requests.Session()
         sess.headers.update({"User-Agent": self.UA, "Accept-Language": "fr-FR,fr;q=0.9"})
+        self._load_cookies(sess)
+        old = self.state.get("access_token")
         page = sess.get(self.LOGIN_PAGE, params={"next_url": self.NEXT_URL}, timeout=20)
+        # Session « rester connecté » encore valide : Netatmo redélivre un token sans
+        # nouvelle connexion (donc sans e-mail d'alerte).
+        token = self._access_cookie(sess)
+        if token and token != old and "auth.netatmo.com" not in page.url:
+            self._store(sess, token)
+            log.info("Token renouvelé via la session existante (sans reconnexion)")
+            return
+        log.info("Connexion au compte Netatmo (mode web)")
         # La page récupère le jeton CSRF via /access/csrf puis soumet le formulaire.
         csrf = sess.get(
             "https://auth.netatmo.com/access/csrf",
@@ -208,16 +218,38 @@ class NetatmoWeb(Netatmo):
         )
         names = sorted({c.name for c in sess.cookies})
         log.debug("Connexion web : HTTP %s, URL finale %s, cookies %s", r.status_code, r.url, names)
-        token = next((c.value for c in sess.cookies if c.name == "netatmocomaccess_token"), None)
+        token = self._access_cookie(sess)
         if not token:
             raise AuthError(
                 f"Connexion refusée (HTTP {r.status_code}, cookies reçus : {names}). "
                 "Vérifiez e-mail et mot de passe ; une double authentification ou un captcha bloque ce mode"
             )
-        self.state["access_token"] = unquote(token)
+        self._store(sess, token)
+        log.info("Connexion web réussie")
+
+    @staticmethod
+    def _access_cookie(sess):
+        val = next((c.value for c in sess.cookies if c.name == "netatmocomaccess_token"), None)
+        return unquote(val) if val else None
+
+    def _store(self, sess, token):
+        self.state["access_token"] = token
         self.state["expires_at"] = time.time() + 3 * 3600 - 300
         save_json(STATE_FILE, self.state)
-        log.info("Connexion web réussie")
+        cookies = [
+            {"name": c.name, "value": c.value, "domain": c.domain, "path": c.path,
+             "expires": c.expires, "secure": c.secure}
+            for c in sess.cookies if c.name != "netatmocomaccess_token"
+        ]
+        save_json(COOKIES_FILE, cookies)
+
+    @staticmethod
+    def _load_cookies(sess):
+        for c in load_json(COOKIES_FILE, []):
+            if c.get("expires") and c["expires"] < time.time():
+                continue
+            sess.cookies.set(c["name"], c["value"], domain=c["domain"], path=c["path"],
+                             expires=c.get("expires"), secure=c.get("secure", True))
 
 
 # --------------------------------------------------------------------------- MQTT
