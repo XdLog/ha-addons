@@ -54,6 +54,15 @@ class Netatmo:
         self.client_id = opts["client_id"]
         self.client_secret = opts["client_secret"]
         self.state = state
+        code = opts.get("auth_code") or ""
+        if code and state.get("used_auth_code") != code:
+            self.exchange_code(code, opts.get("redirect_uri") or "https://localhost")
+            state["used_auth_code"] = code
+            state["seed_refresh_token"] = opts.get("refresh_token") or ""
+            save_json(STATE_FILE, state)
+            return
+        if state.get("used_auth_code") and state.get("refresh_token"):
+            return  # token issu d'un code d'autorisation : on le garde
         seed = opts["refresh_token"]
         # Netatmo fait tourner le refresh token : on garde le dernier reçu, sauf si
         # l'utilisateur a collé un nouveau token dans les options.
@@ -63,6 +72,28 @@ class Netatmo:
             state.pop("access_token", None)
             state["expires_at"] = 0
             save_json(STATE_FILE, state)
+
+    def exchange_code(self, code, redirect_uri):
+        log.info("Échange du code d'autorisation Netatmo")
+        r = requests.post(
+            f"{API}/oauth2/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": redirect_uri,
+                "scope": "read_magellan write_magellan",
+                "client_id": self.client_id,
+                "client_secret": self.client_secret,
+            },
+            timeout=20,
+        )
+        if r.status_code != 200:
+            raise AuthError(f"Échec de l'échange du code ({r.status_code}) : {r.text}")
+        tok = r.json()
+        log.info("Token obtenu, scopes : %s", tok.get("scope"))
+        self.state["access_token"] = tok["access_token"]
+        self.state["refresh_token"] = tok["refresh_token"]
+        self.state["expires_at"] = time.time() + int(tok.get("expires_in", 10800)) - 120
 
     def refresh(self):
         log.info("Renouvellement du token Netatmo")
@@ -234,7 +265,8 @@ def main():
         stream=sys.stdout,
     )
     logging.getLogger("urllib3").setLevel(logging.WARNING)
-    for key in ("client_id", "client_secret", "refresh_token"):
+    required = ("client_id", "client_secret") if opts.get("auth_code") else ("client_id", "client_secret", "refresh_token")
+    for key in required:
         if not opts.get(key):
             log.error("Option manquante : %s", key)
             sys.exit(1)
@@ -272,7 +304,7 @@ def main():
     interval = int(opts.get("scan_interval", 60))
     while True:
         try:
-            data = api.get("/api/homestatus", {"home_id": home_id, "device_types": ["NLEVSE"]})
+            data = api.get("/api/homestatus", {"home_id": home_id})
             log.debug("homestatus brut : %s", json.dumps(data))
             m = next((x for x in data["body"]["home"].get("modules", []) if x["id"] == mod["id"]), None)
             if m is None:
