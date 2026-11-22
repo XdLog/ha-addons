@@ -102,14 +102,25 @@ class Netatmo:
         raise AuthError("Accès refusé après renouvellement du token")
 
     def find_charger(self, home_id, module_id):
-        data = self.get("/api/homesdata", {})
-        for home in data["body"].get("homes", []):
-            if home_id and home["id"] != home_id:
-                continue
+        """Retourne (home_id, module). Sans filtre gateway_types, homesdata ne renvoie
+        pas les modules Legrand : on le précise, puis on se rabat sur homestatus."""
+        if home_id and module_id:
+            log.info("home_id et module_id fournis : pas de recherche")
+            return home_id, {"id": module_id, "type": "NLEVSE", "name": "Borne recharge"}
+        data = self.get("/api/homesdata", {"gateway_types": ["NLEVSE", "NLG"]})
+        log.debug("homesdata brut : %s", json.dumps(data))
+        homes = [h for h in data["body"].get("homes", []) if not home_id or h["id"] == home_id]
+        for home in homes:
             for mod in home.get("modules", []):
                 if (module_id and mod["id"] == module_id) or (not module_id and mod.get("type") == "NLEVSE"):
                     return home["id"], mod
-        raise RuntimeError("Aucune borne NLEVSE trouvée dans homesdata (vérifiez les scopes du token)")
+        for home in homes:
+            status = self.get("/api/homestatus", {"home_id": home["id"]})
+            log.debug("homestatus brut : %s", json.dumps(status))
+            for mod in status["body"].get("home", {}).get("modules", []):
+                if (module_id and mod["id"] == module_id) or (not module_id and mod.get("type") == "NLEVSE"):
+                    return home["id"], dict(mod, name="Borne recharge")
+        raise RuntimeError("Aucune borne NLEVSE trouvée (vérifiez les scopes du token, ou renseignez home_id et module_id)")
 
 
 # --------------------------------------------------------------------------- MQTT
@@ -216,7 +227,13 @@ def main():
 
     state = load_json(STATE_FILE, {})
     api = Netatmo(opts, state)
-    home_id, mod = api.find_charger(opts.get("home_id") or "", opts.get("module_id") or "")
+    while True:
+        try:
+            home_id, mod = api.find_charger(opts.get("home_id") or "", opts.get("module_id") or "")
+            break
+        except Exception as e:
+            log.error("%s. Nouvel essai dans 5 minutes.", e)
+            time.sleep(300)
     log.info("Borne trouvée : %s (%s) dans le home %s", mod.get("name"), mod["id"], home_id)
 
     state_topic = f"{BASE_TOPIC}/{mod['id'].replace(':', '').lower()}/state"
