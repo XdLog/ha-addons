@@ -1,5 +1,5 @@
 name: "Green'Up Netatmo"
-version: "0.2.1"
+version: "0.2.2"
 slug: greenup_netatmo
 description: "Borne Legrand Green'Up Home (NLEVSE) via l'API Netatmo, publiée en MQTT avec découverte"
 arch:
@@ -22,6 +22,7 @@ options:
   home_id: ""
   module_id: ""
   scan_interval: 60
+  scan_interval_idle: 300
   debug: false
   mqtt_host: ""
   mqtt_port: 1883
@@ -39,6 +40,7 @@ schema:
   home_id: str?
   module_id: str?
   scan_interval: int(30,3600)
+  scan_interval_idle: int(60,3600)
   debug: bool
   mqtt_host: str?
   mqtt_port: port

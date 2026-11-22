@@ -1,12 +1,13 @@
 # Green'Up Netatmo (add-on local Home Assistant)
 
-Lit la borne Legrand Green'Up Home (module `NLEVSE`) via l'API Netatmo toutes les 60 s
+Lit la borne Legrand Green'Up Home (module `NLEVSE`) via l'API Netatmo (60 s en charge, 5 min au repos)
 et crée ses entités dans HA par découverte MQTT.
 
 ## Prérequis
 - Add-on **Mosquitto broker** et intégration **MQTT** configurés.
-- Application sur dev.netatmo.com : client_id, client_secret, et un **refresh token**
-  généré dans « Token generator » avec les scopes `read_*` (dont `read_magellan`).
+- Mode **compte** (recommandé, seul à voir la borne NLEVSE) : `netatmo_email` et `netatmo_password`
+  du compte Home + Control. Non officiel, lecture seule.
+- Mode application (ne voit pas la borne à ce jour) : client_id, client_secret, refresh token.
 
 ## Installation
 1. Copier le dossier `greenup_netatmo` dans `\\homeassistant\addons\` (add-on Samba share)

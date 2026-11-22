@@ -374,14 +374,17 @@ def main():
 
     signal.signal(signal.SIGTERM, stop)
 
-    interval = int(opts.get("scan_interval", 60))
+    interval_charging = int(opts.get("scan_interval", 60))
+    interval_idle = int(opts.get("scan_interval_idle", 300))
+    interval = interval_idle
+    auth_failures = 0
     while True:
         try:
             data = api.get("/api/homestatus", {"home_id": home_id})
             log.debug("homestatus brut : %s", json.dumps(data))
             m = next((x for x in data["body"]["home"].get("modules", []) if x["id"] == mod["id"]), None)
             if m is None:
-                log.warning("Borne absente de homestatus : regénérez le refresh token en cochant TOUS les scopes du Token generator")
+                log.warning("Borne absente de homestatus (token sans accès à la borne ?)")
                 client.publish(avail_topic, "offline", retain=True)
             else:
                 session_wh = int(m.get("current_total_charge_consumption", 0))
@@ -406,13 +409,19 @@ def main():
                 client.publish(state_topic, json.dumps(payload), retain=True)
                 client.publish(avail_topic, "online", retain=True)
                 log.debug("Publié : %s", payload)
+                # En charge : relevé rapproché ; au repos : relevé espacé.
+                interval = interval_charging if status == 3 else interval_idle
+            auth_failures = 0
         except AuthError as e:
-            log.error("%s. Régénérez un refresh token et collez-le dans les options.", e)
+            auth_failures += 1
+            wait = min(600 * 2 ** (auth_failures - 1), 3600)
+            log.error("%s. Nouvel essai dans %d min.", e, wait // 60)
             client.publish(avail_topic, "offline", retain=True)
-            time.sleep(600)
+            time.sleep(wait)
             continue
         except Exception as e:  # réseau, API indisponible...
             log.warning("Erreur pendant la lecture : %s", e)
+            interval = interval_idle
         time.sleep(interval)
 
 
