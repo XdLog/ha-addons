@@ -124,19 +124,33 @@ class Netatmo:
 
 
 # --------------------------------------------------------------------------- MQTT
-def mqtt_settings():
+def mqtt_settings(opts):
+    """Options manuelles si mqtt_host est renseigné, sinon service MQTT du Supervisor."""
+    if opts.get("mqtt_host"):
+        log.info("MQTT : options manuelles (%s)", opts["mqtt_host"])
+        return {
+            "host": opts["mqtt_host"],
+            "port": opts.get("mqtt_port") or 1883,
+            "username": opts.get("mqtt_user") or "",
+            "password": opts.get("mqtt_password") or "",
+        }
     token = os.environ.get("SUPERVISOR_TOKEN")
     r = requests.get(
         "http://supervisor/services/mqtt",
         headers={"Authorization": f"Bearer {token}"},
         timeout=10,
     )
-    r.raise_for_status()
+    if r.status_code != 200:
+        raise RuntimeError(
+            f"Service MQTT du Supervisor indisponible ({r.status_code} : {r.text}). "
+            "Renseignez mqtt_host, mqtt_user et mqtt_password dans les options."
+        )
+    log.info("MQTT : service du Supervisor")
     return r.json()["data"]
 
 
-def connect_mqtt(avail_topic):
-    cfg = mqtt_settings()
+def connect_mqtt(opts, avail_topic):
+    cfg = mqtt_settings(opts)
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="greenup_netatmo")
     if cfg.get("username"):
         client.username_pw_set(cfg["username"], cfg.get("password"))
@@ -238,7 +252,13 @@ def main():
 
     state_topic = f"{BASE_TOPIC}/{mod['id'].replace(':', '').lower()}/state"
     avail_topic = f"{BASE_TOPIC}/availability"
-    client = connect_mqtt(avail_topic)
+    while True:
+        try:
+            client = connect_mqtt(opts, avail_topic)
+            break
+        except Exception as e:
+            log.error("Connexion MQTT impossible : %s. Nouvel essai dans 5 minutes.", e)
+            time.sleep(300)
     publish_discovery(client, mod, state_topic, avail_topic)
     client.publish(avail_topic, "online", retain=True)
 
