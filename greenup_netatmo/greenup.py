@@ -182,17 +182,25 @@ class NetatmoWeb(Netatmo):
         sess = requests.Session()
         sess.headers.update({"User-Agent": self.UA, "Accept-Language": "fr-FR,fr;q=0.9"})
         page = sess.get(self.LOGIN_PAGE, params={"next_url": self.NEXT_URL}, timeout=20)
-        m = re.search(r'name="_token"\s+value="([^"]+)"', page.text) or re.search(r'value="([^"]+)"\s+name="_token"', page.text)
-        if not m:
-            raise AuthError(f"Page de connexion inattendue ({page.status_code}), champ _token introuvable")
+        # La page récupère le jeton CSRF via /access/csrf puis soumet le formulaire.
+        csrf = sess.get(
+            "https://auth.netatmo.com/access/csrf",
+            headers={"Referer": page.url, "X-Requested-With": "XMLHttpRequest"},
+            timeout=20,
+        )
+        try:
+            token_csrf = csrf.json()["token"]
+        except (ValueError, KeyError):
+            raise AuthError(f"Jeton CSRF introuvable (HTTP {csrf.status_code})")
         r = sess.post(
             self.LOGIN_POST,
+            params={"next_url": self.NEXT_URL},
             data={
                 "email": self.email,
                 "password": self.password,
-                "_token": m.group(1),
-                "stay_logged": "accept",
-                "next_url": self.NEXT_URL,
+                "stay_logged": "on",
+                "website": "",
+                "_token": token_csrf,
             },
             headers={"Referer": page.url, "Origin": "https://auth.netatmo.com"},
             timeout=20,
