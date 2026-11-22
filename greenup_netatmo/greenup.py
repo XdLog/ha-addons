@@ -272,11 +272,11 @@ def main():
     interval = int(opts.get("scan_interval", 60))
     while True:
         try:
-            data = api.get("/api/homestatus", {"home_id": home_id})
+            data = api.get("/api/homestatus", {"home_id": home_id, "device_types": ["NLEVSE"]})
             log.debug("homestatus brut : %s", json.dumps(data))
             m = next((x for x in data["body"]["home"].get("modules", []) if x["id"] == mod["id"]), None)
             if m is None:
-                log.warning("Borne absente de homestatus")
+                log.warning("Borne absente de homestatus : regénérez le refresh token en cochant TOUS les scopes du Token generator")
                 client.publish(avail_topic, "offline", retain=True)
             else:
                 session_wh = int(m.get("current_total_charge_consumption", 0))

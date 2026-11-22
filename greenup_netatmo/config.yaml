@@ -1,5 +1,5 @@
 name: "Green'Up Netatmo"
-version: "0.1.3"
+version: "0.1.4"
 slug: greenup_netatmo
 description: "Borne Legrand Green'Up Home (NLEVSE) via l'API Netatmo, publiée en MQTT avec découverte"
 arch:
