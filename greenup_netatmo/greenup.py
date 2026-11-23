@@ -164,6 +164,7 @@ class NetatmoWeb(Netatmo):
 
     LOGIN_PAGE = "https://auth.netatmo.com/fr-fr/access/login"
     LOGIN_POST = "https://auth.netatmo.com/access/postlogin"
+    KEYCHAIN = "https://auth.netatmo.com/fr-fr/access/keychain"
     NEXT_URL = "https://dev.netatmo.com/"
     UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36"
 
@@ -183,14 +184,19 @@ class NetatmoWeb(Netatmo):
         sess.headers.update({"User-Agent": self.UA, "Accept-Language": "fr-FR,fr;q=0.9"})
         self._load_cookies(sess)
         old = self.state.get("access_token")
+        # Session « rester connecté » (cookie authnetatmocomrefresh_token) : la page
+        # keychain redélivre un token sans nouvelle connexion, donc sans e-mail d'alerte.
+        if any(c.name == "authnetatmocomrefresh_token" for c in sess.cookies):
+            for url in (self.KEYCHAIN, self.LOGIN_PAGE):
+                r0 = sess.get(url, params={"next_url": self.NEXT_URL}, timeout=20)
+                token = self._access_cookie(sess)
+                log.debug("Renouvellement par session via %s : HTTP %s, URL finale %s, token %s",
+                          url, r0.status_code, r0.url, "nouveau" if token and token != old else "absent")
+                if token and token != old:
+                    self._store(sess, token)
+                    log.info("Token renouvelé via la session existante (sans reconnexion)")
+                    return
         page = sess.get(self.LOGIN_PAGE, params={"next_url": self.NEXT_URL}, timeout=20)
-        # Session « rester connecté » encore valide : Netatmo redélivre un token sans
-        # nouvelle connexion (donc sans e-mail d'alerte).
-        token = self._access_cookie(sess)
-        if token and token != old and "auth.netatmo.com" not in page.url:
-            self._store(sess, token)
-            log.info("Token renouvelé via la session existante (sans reconnexion)")
-            return
         log.info("Connexion au compte Netatmo (mode web)")
         # La page récupère le jeton CSRF via /access/csrf puis soumet le formulaire.
         csrf = sess.get(
