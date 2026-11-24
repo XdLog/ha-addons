@@ -360,6 +360,41 @@ def publish_discovery(client, mod, state_topic, avail_topic):
         client.publish(f"{DISCOVERY_PREFIX}/{component}/greenup_{uid}/{key}/config", json.dumps(payload), retain=True)
 
 
+# --------------------------------------------------------------------------- déclencheur HA
+def ha_state(entity_id):
+    """État d'une entité HA via l'API Core du Supervisor (homeassistant_api)."""
+    r = requests.get(
+        f"http://supervisor/core/api/states/{entity_id}",
+        headers={"Authorization": f"Bearer {os.environ.get('SUPERVISOR_TOKEN')}"},
+        timeout=10,
+    )
+    r.raise_for_status()
+    return str(r.json().get("state", "")).lower()
+
+
+def wait_or_trigger(seconds, entity_id, trigger_states, last):
+    """Attend `seconds`, mais rend la main dès que l'entité du véhicule passe dans un
+    état « en charge ». Retourne le dernier état lu."""
+    if not entity_id:
+        time.sleep(seconds)
+        return last
+    end = time.time() + seconds
+    while True:
+        try:
+            cur = ha_state(entity_id)
+        except Exception as e:  # HA indisponible : on ne bloque pas le relevé
+            log.debug("Lecture de %s impossible : %s", entity_id, e)
+            cur = last
+        if cur in trigger_states and last not in trigger_states and last is not None:
+            log.info("%s est passé à « %s » : relevé immédiat", entity_id, cur)
+            return cur
+        last = cur
+        remaining = end - time.time()
+        if remaining <= 0:
+            return last
+        time.sleep(min(15, remaining))
+
+
 # --------------------------------------------------------------------------- boucle
 def main():
     opts = load_json(OPTIONS_FILE, {})
@@ -416,6 +451,11 @@ def main():
     interval_idle = int(opts.get("scan_interval_idle", 300))
     interval = interval_idle
     auth_failures = 0
+    trigger_entity = (opts.get("trigger_entity") or "").strip()
+    trigger_states = {x.strip().lower() for x in (opts.get("trigger_states") or "on,charging").split(",") if x.strip()}
+    if trigger_entity:
+        log.info("Déclencheur : %s (états %s)", trigger_entity, ", ".join(sorted(trigger_states)))
+    trigger_last = None
     while True:
         try:
             data = api.get("/api/homestatus", {"home_id": home_id})
@@ -460,7 +500,11 @@ def main():
         except Exception as e:  # réseau, API indisponible...
             log.warning("Erreur pendant la lecture : %s", e)
             interval = interval_idle
-        time.sleep(interval)
+        # Au repos, on surveille l'entité du véhicule pour basculer sans attendre.
+        if interval == interval_idle:
+            trigger_last = wait_or_trigger(interval, trigger_entity, trigger_states, trigger_last)
+        else:
+            time.sleep(interval)
 
 
 if __name__ == "__main__":
